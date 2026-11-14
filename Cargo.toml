@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/uve-core"]
+resolver = "2"
