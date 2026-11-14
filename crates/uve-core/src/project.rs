@@ -55,6 +55,23 @@ pub struct Transform {
     pub opacity: KeyframedValue<f32>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvaluatedTransform {
+    pub x: f32,
+    pub y: f32,
+    pub scale_x: f32,
+    pub scale_y: f32,
+    pub rotation: f32,
+    pub opacity: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderItem<'a> {
+    pub clip: &'a Clip,
+    pub local_frame: u64,
+    pub transform: EvaluatedTransform,
+}
+
 impl Default for Transform {
     fn default() -> Self {
         Self {
@@ -65,6 +82,35 @@ impl Default for Transform {
             rotation: KeyframedValue::constant(0.0),
             opacity: KeyframedValue::constant(1.0),
         }
+    }
+}
+
+impl Transform {
+    pub fn at(&self, frame: u64) -> EvaluatedTransform {
+        EvaluatedTransform {
+            x: self.x.value_at(frame),
+            y: self.y.value_at(frame),
+            scale_x: self.scale_x.value_at(frame),
+            scale_y: self.scale_y.value_at(frame),
+            rotation: self.rotation.value_at(frame),
+            opacity: self.opacity.value_at(frame).clamp(0.0, 1.0),
+        }
+    }
+}
+
+impl Timeline {
+    pub fn render_items_at(&self, frame: u64) -> Vec<RenderItem<'_>> {
+        self.tracks
+            .iter()
+            .filter(|track| !track.muted)
+            .flat_map(|track| track.clips.iter())
+            .filter(|clip| clip.contains_frame(frame))
+            .map(|clip| RenderItem {
+                clip,
+                local_frame: frame - clip.start_frame,
+                transform: clip.transform.at(frame - clip.start_frame),
+            })
+            .collect()
     }
 }
 
@@ -179,5 +225,31 @@ mod tests {
             project.validate(),
             Err(ProjectError::InvalidDimensions)
         ));
+    }
+
+    #[test]
+    fn evaluates_active_clips_at_a_frame() {
+        let mut project = Project::new("preview", 1280, 720, 30.0);
+        project.timeline.tracks.push(Track {
+            id: "track-1".into(),
+            name: "Main".into(),
+            muted: false,
+            clips: vec![Clip {
+                id: "clip-1".into(),
+                start_frame: 10,
+                duration_frames: 20,
+                source: ClipSource::Text {
+                    content: "Preview".into(),
+                },
+                transform: Transform::default(),
+                effects: Vec::new(),
+            }],
+        });
+
+        let items = project.timeline.render_items_at(15);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].local_frame, 5);
+        assert_eq!(items[0].transform.opacity, 1.0);
+        assert!(project.timeline.render_items_at(30).is_empty());
     }
 }
