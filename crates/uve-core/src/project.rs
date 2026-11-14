@@ -1,0 +1,183 @@
+use crate::effect::EffectInstance;
+use crate::keyframe::KeyframedValue;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Project {
+    pub version: u32,
+    pub name: String,
+    pub frame_rate: f32,
+    pub width: u32,
+    pub height: u32,
+    pub timeline: Timeline,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Timeline {
+    pub tracks: Vec<Track>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Track {
+    pub id: String,
+    pub name: String,
+    pub muted: bool,
+    pub clips: Vec<Clip>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Clip {
+    pub id: String,
+    pub start_frame: u64,
+    pub duration_frames: u64,
+    pub source: ClipSource,
+    pub transform: Transform,
+    pub effects: Vec<EffectInstance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ClipSource {
+    Video { path: String },
+    Image { path: String },
+    Audio { path: String },
+    Text { content: String },
+    PsdLayer { document: String, layer_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Transform {
+    pub x: KeyframedValue<f32>,
+    pub y: KeyframedValue<f32>,
+    pub scale_x: KeyframedValue<f32>,
+    pub scale_y: KeyframedValue<f32>,
+    pub rotation: KeyframedValue<f32>,
+    pub opacity: KeyframedValue<f32>,
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Self {
+            x: KeyframedValue::constant(0.0),
+            y: KeyframedValue::constant(0.0),
+            scale_x: KeyframedValue::constant(1.0),
+            scale_y: KeyframedValue::constant(1.0),
+            rotation: KeyframedValue::constant(0.0),
+            opacity: KeyframedValue::constant(1.0),
+        }
+    }
+}
+
+impl Clip {
+    pub fn end_frame(&self) -> u64 {
+        self.start_frame.saturating_add(self.duration_frames)
+    }
+
+    pub fn contains_frame(&self, frame: u64) -> bool {
+        frame >= self.start_frame && frame < self.end_frame()
+    }
+}
+
+impl Project {
+    pub fn new(name: impl Into<String>, width: u32, height: u32, frame_rate: f32) -> Self {
+        Self {
+            version: 1,
+            name: name.into(),
+            frame_rate,
+            width,
+            height,
+            timeline: Timeline::default(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProjectError> {
+        if self.width == 0 || self.height == 0 {
+            return Err(ProjectError::InvalidDimensions);
+        }
+        if !self.frame_rate.is_finite() || self.frame_rate <= 0.0 {
+            return Err(ProjectError::InvalidFrameRate);
+        }
+        for track in &self.timeline.tracks {
+            for clip in &track.clips {
+                if clip.duration_frames == 0 {
+                    return Err(ProjectError::ZeroLengthClip {
+                        clip_id: clip.id.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    pub fn from_json(json: &str) -> Result<Self, ProjectError> {
+        let project: Self = serde_json::from_str(json)?;
+        project.validate()?;
+        Ok(project)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ProjectError {
+    #[error("project dimensions must be greater than zero")]
+    InvalidDimensions,
+    #[error("frame rate must be finite and greater than zero")]
+    InvalidFrameRate,
+    #[error("clip `{clip_id}` has zero duration")]
+    ZeroLengthClip { clip_id: String },
+    #[error("invalid project JSON: {0}")]
+    InvalidJson(#[from] serde_json::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keyframe::{Interpolation, Keyframe};
+
+    #[test]
+    fn round_trips_a_project_as_json() {
+        let mut project = Project::new("test", 1920, 1080, 30.0);
+        project.timeline.tracks.push(Track {
+            id: "track-1".into(),
+            name: "Main".into(),
+            muted: false,
+            clips: vec![Clip {
+                id: "clip-1".into(),
+                start_frame: 0,
+                duration_frames: 60,
+                source: ClipSource::Text {
+                    content: "Hello".into(),
+                },
+                transform: Transform {
+                    x: KeyframedValue {
+                        default: 0.0,
+                        keyframes: vec![Keyframe {
+                            frame: 30,
+                            value: 100.0,
+                            interpolation: Interpolation::Linear,
+                        }],
+                    },
+                    ..Transform::default()
+                },
+                effects: Vec::new(),
+            }],
+        });
+
+        let restored = Project::from_json(&project.to_json().unwrap()).unwrap();
+        assert_eq!(restored, project);
+        assert!(restored.timeline.tracks[0].clips[0].contains_frame(59));
+        assert!(!restored.timeline.tracks[0].clips[0].contains_frame(60));
+    }
+
+    #[test]
+    fn rejects_invalid_projects() {
+        let project = Project::new("invalid", 0, 1080, 30.0);
+        assert!(matches!(
+            project.validate(),
+            Err(ProjectError::InvalidDimensions)
+        ));
+    }
+}

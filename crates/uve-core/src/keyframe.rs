@@ -68,6 +68,16 @@ impl Lerp for f32 {
     }
 }
 
+impl Lerp for bool {
+    fn lerp(&self, other: &Self, progress: f32) -> Self {
+        if progress < 1.0 {
+            *self
+        } else {
+            *other
+        }
+    }
+}
+
 impl Lerp for [f32; 2] {
     fn lerp(&self, other: &Self, progress: f32) -> Self {
         [
