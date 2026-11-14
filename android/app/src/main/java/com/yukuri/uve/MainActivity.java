@@ -8,6 +8,7 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.content.Context;
+import android.view.MotionEvent;
 import android.view.View;
 
 public final class MainActivity extends Activity {
@@ -19,6 +20,8 @@ public final class MainActivity extends Activity {
 
     private static final class EditorView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private float playhead = 40f;
+        private boolean dragging;
 
         EditorView(Context context) {
             super(context);
@@ -51,10 +54,43 @@ public final class MainActivity extends Activity {
             canvas.drawRoundRect(new RectF(24, height - 188, width - 24, height - 48), 8, 8, paint);
             paint.setColor(Color.rgb(155, 162, 176));
             canvas.drawText("タイムライン", 40, height - 158, paint);
+            canvas.drawText("フレーム " + Math.max(0, Math.round(playhead - 40)), width - 150, height - 158, paint);
             paint.setColor(Color.rgb(76, 86, 103));
             for (int x = 40; x < width - 40; x += 80) {
                 canvas.drawRect(x, height - 130, x + 2, height - 64, paint);
             }
+            paint.setColor(Color.rgb(255, 193, 7));
+            canvas.drawRect(playhead, height - 138, playhead + 3, height - 54, paint);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            float timelineTop = getHeight() - 220;
+            if (event.getY() < timelineTop) {
+                return true;
+            }
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    dragging = true;
+                    updatePlayhead(event.getX());
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (dragging) {
+                        updatePlayhead(event.getX());
+                    }
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    dragging = false;
+                    return true;
+                default:
+                    return true;
+            }
+        }
+
+        private void updatePlayhead(float x) {
+            playhead = Math.max(40f, Math.min(getWidth() - 40f, x));
+            invalidate();
         }
     }
 }
