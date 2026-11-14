@@ -99,6 +99,55 @@ impl Transform {
 }
 
 impl Timeline {
+    pub fn add_track(&mut self, track: Track) -> Result<(), TimelineError> {
+        if self.tracks.iter().any(|existing| existing.id == track.id) {
+            return Err(TimelineError::DuplicateId(track.id));
+        }
+        self.tracks.push(track);
+        Ok(())
+    }
+
+    pub fn add_clip(&mut self, track_id: &str, clip: Clip) -> Result<(), TimelineError> {
+        if self
+            .tracks
+            .iter()
+            .flat_map(|track| track.clips.iter())
+            .any(|existing| existing.id == clip.id)
+        {
+            return Err(TimelineError::DuplicateId(clip.id));
+        }
+        if clip.duration_frames == 0 {
+            return Err(TimelineError::ZeroLengthClip(clip.id));
+        }
+        let track = self
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| TimelineError::TrackNotFound(track_id.into()))?;
+        track.clips.push(clip);
+        Ok(())
+    }
+
+    pub fn move_clip(&mut self, clip_id: &str, start_frame: u64) -> Result<(), TimelineError> {
+        let clip = self
+            .tracks
+            .iter_mut()
+            .flat_map(|track| track.clips.iter_mut())
+            .find(|clip| clip.id == clip_id)
+            .ok_or_else(|| TimelineError::ClipNotFound(clip_id.into()))?;
+        clip.start_frame = start_frame;
+        Ok(())
+    }
+
+    pub fn remove_clip(&mut self, clip_id: &str) -> Result<Clip, TimelineError> {
+        for track in &mut self.tracks {
+            if let Some(index) = track.clips.iter().position(|clip| clip.id == clip_id) {
+                return Ok(track.clips.remove(index));
+            }
+        }
+        Err(TimelineError::ClipNotFound(clip_id.into()))
+    }
+
     pub fn render_items_at(&self, frame: u64) -> Vec<RenderItem<'_>> {
         self.tracks
             .iter()
@@ -112,6 +161,18 @@ impl Timeline {
             })
             .collect()
     }
+}
+
+#[derive(Debug, Error, PartialEq)]
+pub enum TimelineError {
+    #[error("duplicate timeline id: {0}")]
+    DuplicateId(String),
+    #[error("track not found: {0}")]
+    TrackNotFound(String),
+    #[error("clip not found: {0}")]
+    ClipNotFound(String),
+    #[error("clip `{0}` has zero duration")]
+    ZeroLengthClip(String),
 }
 
 impl Clip {
@@ -251,5 +312,37 @@ mod tests {
         assert_eq!(items[0].local_frame, 5);
         assert_eq!(items[0].transform.opacity, 1.0);
         assert!(project.timeline.render_items_at(30).is_empty());
+    }
+
+    #[test]
+    fn edits_clips_through_timeline_api() {
+        let mut timeline = Timeline::default();
+        timeline
+            .add_track(Track {
+                id: "track-1".into(),
+                name: "Main".into(),
+                muted: false,
+                clips: Vec::new(),
+            })
+            .unwrap();
+        timeline
+            .add_clip(
+                "track-1",
+                Clip {
+                    id: "clip-1".into(),
+                    start_frame: 0,
+                    duration_frames: 10,
+                    source: ClipSource::Image {
+                        path: "image.png".into(),
+                    },
+                    transform: Transform::default(),
+                    effects: Vec::new(),
+                },
+            )
+            .unwrap();
+        timeline.move_clip("clip-1", 20).unwrap();
+        assert_eq!(timeline.tracks[0].clips[0].start_frame, 20);
+        assert_eq!(timeline.remove_clip("clip-1").unwrap().id, "clip-1");
+        assert!(timeline.tracks[0].clips.is_empty());
     }
 }
